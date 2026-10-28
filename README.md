@@ -4,6 +4,8 @@ A small, native Windows app that finds and frees wasted disk space: temp files, 
 
 Built with plain C++ and the Win32 API. There's no installer, no runtime and no background service: just a single `.exe`.
 
+**[Download the latest version](https://github.com/ladroxd/TempCleanerV2/releases/latest)** (Windows 10/11, 64-bit). What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+
 ## Three ways to clean
 
 | Mode | What it does |

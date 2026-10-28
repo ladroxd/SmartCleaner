@@ -1,0 +1,66 @@
+# Builds the release artifacts and attaches them to a draft GitHub release whenever a
+# version tag (e.g. v3.0.0) is pushed. The release text comes from
+# .github/release-notes/<tag>.md (copy TEMPLATE.md to start one).
+# Review the draft on GitHub, then publish it.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Check the tag matches version.h
+        shell: pwsh
+        run: |
+          $header = Get-Content version.h -Raw
+          $version = [regex]::Match($header, '#define\s+APP_VERSION_STR\s+"([^"]+)"').Groups[1].Value
+          $parts = foreach ($name in 'MAJOR', 'MINOR', 'PATCH') {
+            [regex]::Match($header, "#define\s+APP_VERSION_$name\s+(\d+)").Groups[1].Value
+          }
+          if ($parts -join '.' -ne $version) {
+            Write-Error "version.h is inconsistent: APP_VERSION_STR is $version but the numbers are $($parts -join '.')"
+            exit 1
+          }
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            Write-Error "Tag ${{ github.ref_name }} doesn't match version.h version $version"
+            exit 1
+          }
+
+      - name: Check the release notes exist
+        shell: pwsh
+        run: |
+          if (-not (Test-Path ".github/release-notes/${{ github.ref_name }}.md")) {
+            Write-Error "Missing .github/release-notes/${{ github.ref_name }}.md"
+            exit 1
+          }
+
+      - name: Build
+        run: msbuild "Temp and Bin Cleaner V2.sln" /p:Configuration=Release /p:Platform=x64 /m /nologo
+
+      # GitHub turns spaces in asset names into dots, so the exe is published without them.
+      - name: Package
+        shell: pwsh
+        run: |
+          Copy-Item "x64/Release/OptiCore Cleaner.exe" OptiCore-Cleaner.exe
+          $hash = (Get-FileHash OptiCore-Cleaner.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  OptiCore-Cleaner.exe" | Out-File -Encoding ascii OptiCore-Cleaner.exe.sha256
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: OptiCore Cleaner ${{ github.ref_name }}
+          body_path: .github/release-notes/${{ github.ref_name }}.md
+          files: |
+            OptiCore-Cleaner.exe
+            OptiCore-Cleaner.exe.sha256
