@@ -42,7 +42,7 @@ static bool IsRunningAsAdmin() {
 #define APP_NAME      L"OptiCore Cleaner"
 #define APP_SUBTITLE  L"Simple 1-click cleaner by Ladro"
 #define APP_VERSION   L"" APP_VERSION_STR
-#define GITHUB_REPO   L"ladroxd/TempCleanerV2"
+#define GITHUB_REPO   L"ladroxd/SmartCleaner"
 #define REG_KEY       L"Software\\OptiCore Cleaner"
 #define TASK_NAME     L"OptiCore Cleaner weekly cleanup"
 #define RECENT_HOURS  24

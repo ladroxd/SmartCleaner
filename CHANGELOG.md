@@ -38,5 +38,5 @@ First release as OptiCore Cleaner (previously Temp and Bin Cleaner V2).
 - Read-only files are now deleted instead of skipped.
 - Long cleans no longer stop logging or flood the window with messages.
 
-[Unreleased]: https://github.com/ladroxd/TempCleanerV2/compare/v3.0.0...HEAD
-[3.0.0]: https://github.com/ladroxd/TempCleanerV2/releases/tag/v3.0.0
+[Unreleased]: https://github.com/ladroxd/SmartCleaner/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/ladroxd/SmartCleaner/releases/tag/v3.0.0
