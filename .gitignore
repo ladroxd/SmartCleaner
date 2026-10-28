@@ -361,3 +361,7 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# OptiCore Cleaner: built or downloaded executables dropped in the repo root,
+# and Visual Studio's per-project intermediate folder
+/*.exe
+/Temp and.*/

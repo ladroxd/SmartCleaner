@@ -8,9 +8,11 @@ Built with plain C++ and the Win32 API. There's no installer, no runtime and no 
 
 | Mode | What it does |
 | --- | --- |
-| **Quick Scan** | Checks everything Complete Cleanup would remove and shows how much space you can free, per item. **Nothing is deleted.** |
+| **Quick Scan** | Checks everything Complete Cleanup would remove and shows how much space you can free, per item. **Nothing is deleted.** When it finds something, the button turns into **Clean Now**. |
 | **Complete Cleanup** | One click removes all **system junk** (the first table below). Browser caches, game shader caches and privacy items are left alone. |
-| **Custom Cleanup** | A checklist of **everything** OptiCore can clean, including browser and game caches. Tick what you want, then click **Clean Selected**. |
+| **Custom Cleanup** | A checklist of **everything** OptiCore can clean, with the size of each item measured in the background. Tick what you want, then click **Clean Selected**. Your selection is remembered. |
+
+A progress bar shows how far along a clean is, and the summary includes the free space on your system drive before and after.
 
 ## What it can clean
 
@@ -20,6 +22,7 @@ Built with plain C++ and the Win32 API. There's no installer, no runtime and no 
 | --- | --- | --- |
 | Temporary files | `%TEMP%` | |
 | Windows temporary files | `%WINDIR%\Temp` | ✔ |
+| All users' temp files | `%SystemDrive%\Users\*\AppData\Local\Temp` (every account on the PC) | ✔ |
 | Prefetch | `%WINDIR%\Prefetch` | ✔ |
 | Windows Update cache | `%WINDIR%\SoftwareDistribution\Download` | ✔ |
 | Delivery Optimization files | `%WINDIR%\ServiceProfiles\NetworkService\...\DeliveryOptimization\Cache` | ✔ |
@@ -58,11 +61,40 @@ Games stutter and load slower the first time they're launched while these caches
 | --- | --- |
 | Recent files list | Shortcuts in `%APPDATA%\Microsoft\Windows\Recent` (pinned jump-list items are kept) |
 
+### Advanced (Custom Cleanup only)
+
+| Item | What's cleared | Admin? |
+| --- | --- | --- |
+| Windows component cleanup | Superseded Windows Update components, via `DISM /Online /Cleanup-Image /StartComponentCleanup`. Slow (often 10+ minutes) and can't be stopped midway. The amount freed is measured as the change in free disk space. | ✔ |
+
+## Options
+
+| Option | What it does |
+| --- | --- |
+| **Keep temp files from the last 24 hours** | On by default. Temp files created or changed in the last day are left alone, so running installers and apps aren't broken. |
+| **Exclusions** | Folders OptiCore never touches, including everything inside them. |
+| **Schedule weekly cleanup** | Creates a Task Scheduler task that runs Complete Cleanup every Sunday at 12:00 (or at the next start if the PC was off) and shows a notification. Set it up while running as administrator to include system folders. Schedule it again if you move the exe. |
+| **Theme** | Follow Windows, Light or Dark. |
+
+The Edit menu can copy the log or save it to a text file. Help → **Check for Updates** compares your version with the latest GitHub release. Settings are stored in `HKEY_CURRENT_USER\Software\OptiCore Cleaner`.
+
+## Automatic mode
+
+```
+"OptiCore Cleaner.exe" /auto            Complete Cleanup, no window, notification when done
+"OptiCore Cleaner.exe" /auto /custom    your saved Custom Cleanup selection instead
+"OptiCore Cleaner.exe" /auto /quiet     no notification
+```
+
+The log of the last automatic run is saved to `%LOCALAPPDATA%\OptiCore Cleaner\last-auto-clean.log`.
+
 ## Safety
 
 - The folders being cleaned are never deleted, only their contents.
 - Junctions and symbolic links are never followed, so nothing outside a cleaned folder can be removed.
 - Drive roots and relative paths are refused.
+- Excluded folders are skipped, and recent temp files are kept (see Options).
+- A folder reached twice (for example your own Temp folder through `Users\*`) is only cleaned once.
 - Files that are in use are skipped and counted in the summary.
 - The Windows Update service is paused while its cache is cleared, then restarted. If an update is in progress, that item is skipped.
 - You can click **Stop** at any time. Closing the window mid-clean also stops safely at the next file.
@@ -102,7 +134,8 @@ msbuild "Temp and Bin Cleaner V2.sln" /p:Configuration=Release /p:Platform=x64
 | --- | --- |
 | `local.cpp` | The whole app: what can be cleaned (`g_categories`), the cleaning engine and the window |
 | `app.manifest` | Enables modern controls and per-monitor DPI awareness |
-| `Resource.rc` / `resource.h` | App icon resource |
+| `version.h` | App version, used by About, the update check and the file properties |
+| `Resource.rc` / `resource.h` | App icon and version resources |
 | `Projects Icons/` | Icon source file |
 
 To add something new to clean, add an entry to `g_categories` in `local.cpp`. It shows up in Custom Cleanup automatically, and in Quick Scan and Complete Cleanup too if its group is `GROUP_SYSTEM`.
