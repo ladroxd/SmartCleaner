@@ -1,4 +1,4 @@
-# OptiCore Cleaner
+# SmartCleaner
 
 A small, native Windows app that finds and frees wasted disk space: temp files, update leftovers, crash dumps, logs, caches and the Recycle Bin. It shows exactly what it removed and how much space you got back.
 
@@ -12,7 +12,7 @@ Built with plain C++ and the Win32 API. There's no installer, no runtime and no 
 | --- | --- |
 | **Quick Scan** | Checks everything Complete Cleanup would remove and shows how much space you can free, per item. **Nothing is deleted.** When it finds something, the button turns into **Clean Now**. |
 | **Complete Cleanup** | One click removes all **system junk** (the first table below). Browser caches, game shader caches and privacy items are left alone. |
-| **Custom Cleanup** | A checklist of **everything** OptiCore can clean, with the size of each item measured in the background. Apps you don't have aren't listed. Tick what you want, then click **Clean Selected**. Your selection is remembered. |
+| **Custom Cleanup** | A checklist of **everything** SmartCleaner can clean, with the size of each item measured in the background. Apps you don't have aren't listed. Tick what you want, then click **Clean Selected**. Your selection is remembered. |
 
 A progress bar shows how far along a clean is, and the summary includes the free space on your system drive before and after.
 
@@ -114,18 +114,18 @@ These items are only listed if their folders exist on your PC. An item is skippe
 | Option | What it does |
 | --- | --- |
 | **Keep temp files from the last 24 hours** | On by default. Temp files created or changed in the last day are left alone, so running installers and apps aren't broken. Also applies to the npm, pnpm, pip, Poetry, Go, NuGet and Composer caches. |
-| **Exclusions** | Folders OptiCore never touches, including everything inside them. |
+| **Exclusions** | Folders SmartCleaner never touches, including everything inside them. |
 | **Schedule weekly cleanup** | Creates a Task Scheduler task that runs Complete Cleanup every Sunday at 12:00 (or at the next start if the PC was off) and shows a notification. Set it up while running as administrator to include system folders. Schedule it again if you move the exe. |
 | **Theme** | Follow Windows, Light or Dark. |
 
-The Edit menu can copy the log or save it to a text file. Help → **Check for Updates** compares your version with the latest GitHub release. Settings are stored in `HKEY_CURRENT_USER\Software\OptiCore Cleaner`.
+The Edit menu can copy the log or save it to a text file. Help → **Check for Updates** compares your version with the latest GitHub release. Settings are stored in `HKEY_CURRENT_USER\Software\OptiCore Cleaner`, the name version 3.0.0 used, so they carry over.
 
 ## Automatic mode
 
 ```
-"OptiCore Cleaner.exe" /auto            Complete Cleanup, no window, notification when done
-"OptiCore Cleaner.exe" /auto /custom    your saved Custom Cleanup selection instead
-"OptiCore Cleaner.exe" /auto /quiet     no notification
+SmartCleaner.exe /auto                  Complete Cleanup, no window, notification when done
+SmartCleaner.exe /auto /custom          your saved Custom Cleanup selection instead
+SmartCleaner.exe /auto /quiet           no notification
 ```
 
 The log of the last automatic run is saved to `%LOCALAPPDATA%\OptiCore Cleaner\last-auto-clean.log`.
@@ -146,7 +146,7 @@ The log of the last automatic run is saved to `%LOCALAPPDATA%\OptiCore Cleaner\l
 
 ## Usage
 
-1. Run `OptiCore Cleaner.exe`.
+1. Run `SmartCleaner.exe`.
 2. For a full clean of system folders, click **Restart as Administrator** (or right-click the exe and choose *Run as administrator*). Items marked *(admin)* are mostly skipped without it.
 3. Pick a mode at the top and click the button at the bottom (**Scan**, **Clean Now** or **Clean Selected**).
 
@@ -163,7 +163,7 @@ Steps:
 2. Select the **Release** configuration and the **x64** platform.
 3. Build the solution (`Ctrl+Shift+B`).
 
-The executable is written to `x64\Release\OptiCore Cleaner.exe`.
+The executable is written to `x64\Release\SmartCleaner.exe`.
 
 From a Developer Command Prompt you can also run:
 

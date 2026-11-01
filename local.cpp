@@ -40,10 +40,12 @@ static bool IsRunningAsAdmin() {
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "ole32.lib")
 
-#define APP_NAME      L"OptiCore Cleaner"
+#define APP_NAME      L"SmartCleaner"
 #define APP_SUBTITLE  L"Simple 1-click cleaner by Ladro"
 #define APP_VERSION   L"" APP_VERSION_STR
 #define GITHUB_REPO   L"ladroxd/SmartCleaner"
+// 3.0.0 shipped under the name OptiCore Cleaner. The settings key, log folder and task name
+// keep that name so settings and schedules carry over.
 #define REG_KEY       L"Software\\OptiCore Cleaner"
 #define TASK_NAME     L"OptiCore Cleaner weekly cleanup"
 #define RECENT_HOURS  24
@@ -1310,7 +1312,7 @@ static bool CreateScheduledTask() {
     std::wstring xml =
         L"<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n"
         L"<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\r\n"
-        L"  <RegistrationInfo><Description>Weekly Complete Cleanup by OptiCore Cleaner</Description></RegistrationInfo>\r\n"
+        L"  <RegistrationInfo><Description>Weekly Complete Cleanup by SmartCleaner</Description></RegistrationInfo>\r\n"
         L"  <Triggers><CalendarTrigger><StartBoundary>" + std::wstring(start) + L"</StartBoundary>"
         L"<ScheduleByWeek><DaysOfWeek><Sunday /></DaysOfWeek><WeeksInterval>1</WeeksInterval></ScheduleByWeek>"
         L"</CalendarTrigger></Triggers>\r\n"
@@ -1394,7 +1396,7 @@ static bool IsNewerVersion(const std::wstring& latest, const std::wstring& curre
 }
 
 static void FetchLatestRelease(UpdateInfo& info) {
-    HINTERNET session = WinHttpOpen(L"OptiCore-Cleaner/" APP_VERSION, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    HINTERNET session = WinHttpOpen(L"SmartCleaner/" APP_VERSION, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!session) return;
     WinHttpSetTimeouts(session, 5000, 5000, 10000, 10000);
@@ -2019,7 +2021,7 @@ static void CheckForUpdates() {
 
 static void ShowUpdateResult(HWND hWnd, const UpdateInfo& info) {
     if (info.status == 200 && IsNewerVersion(info.tag, APP_VERSION)) {
-        if (ShowMessage(hWnd, (L"OptiCore Cleaner " + info.tag + L" is available").c_str(),
+        if (ShowMessage(hWnd, (L"SmartCleaner " + info.tag + L" is available").c_str(),
                 L"You have version " APP_VERSION L".", L"Open download page"))
             ShellExecute(hWnd, L"open", L"https://github.com/" GITHUB_REPO L"/releases/latest",
                 NULL, NULL, SW_SHOWNORMAL);
@@ -2051,9 +2053,9 @@ static void ToggleSchedule(HWND hWnd) {
         L"Every Sunday at 12:00, Complete Cleanup runs in the background and shows a "
         L"notification when it's done. If your PC is off then, it runs the next time you start it.";
     if (!g_isAdmin)
-        content += L"\n\nOptiCore isn't running as administrator, so the scheduled cleanup will skip "
+        content += L"\n\nSmartCleaner isn't running as administrator, so the scheduled cleanup will skip "
                    L"system folders. Restart as administrator first for a full clean.";
-    content += L"\n\nIf you move OptiCore Cleaner.exe, schedule it again.";
+    content += L"\n\nIf you move SmartCleaner.exe, schedule it again.";
     if (!ShowMessage(hWnd, L"Clean this PC automatically every week?", content, L"Schedule"))
         return;
 
@@ -2100,7 +2102,7 @@ static void SaveLog(HWND hWnd) {
     SYSTEMTIME st;
     GetLocalTime(&st);
     wchar_t name[64];
-    swprintf_s(name, L"OptiCore log %04u-%02u-%02u.txt", st.wYear, st.wMonth, st.wDay);
+    swprintf_s(name, L"SmartCleaner log %04u-%02u-%02u.txt", st.wYear, st.wMonth, st.wDay);
     dlg->SetFileName(name);
 
     IShellItem* item = nullptr;
@@ -2130,7 +2132,7 @@ static bool PickFolder(HWND owner, std::wstring& folder) {
     DWORD options = 0;
     dlg->GetOptions(&options);
     dlg->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-    dlg->SetTitle(L"Choose a folder OptiCore should never clean");
+    dlg->SetTitle(L"Choose a folder SmartCleaner should never clean");
 
     bool picked = false;
     IShellItem* item = nullptr;
@@ -2167,7 +2169,7 @@ LRESULT CALLBACK ExclusionsWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
     switch (msg) {
     case WM_CREATE:
         hLabel = CreateWindow(L"STATIC",
-            L"OptiCore never touches these folders or anything inside them.",
+            L"SmartCleaner never touches these folders or anything inside them.",
             WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX, 0, 0, 0, 0, hWnd, NULL, NULL, NULL);
         g_hExclList = CreateWindow(L"LISTBOX", L"",
             WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,

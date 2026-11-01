@@ -1,7 +1,6 @@
-# Builds the release artifacts and attaches them to a draft GitHub release whenever a
+# Builds the release artifacts and publishes them as the latest GitHub release whenever a
 # version tag (e.g. v3.0.0) is pushed. The release text comes from
 # .github/release-notes/<tag>.md (copy TEMPLATE.md to start one).
-# Review the draft on GitHub, then publish it.
 
 name: Release
 
@@ -48,19 +47,32 @@ jobs:
       - name: Build
         run: msbuild "Temp and Bin Cleaner V2.sln" /p:Configuration=Release /p:Platform=x64 /m /nologo
 
-      # GitHub turns spaces in asset names into dots, so the exe is published without them.
       - name: Package
         shell: pwsh
         run: |
-          Copy-Item "x64/Release/OptiCore Cleaner.exe" OptiCore-Cleaner.exe
-          $hash = (Get-FileHash OptiCore-Cleaner.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  OptiCore-Cleaner.exe" | Out-File -Encoding ascii OptiCore-Cleaner.exe.sha256
+          Copy-Item "x64/Release/SmartCleaner.exe" SmartCleaner.exe
+          $hash = (Get-FileHash SmartCleaner.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  SmartCleaner.exe" | Out-File -Encoding ascii SmartCleaner.exe.sha256
+
+      # A draft left by an earlier run of this tag would keep its old files, so start clean.
+      - name: Remove any old draft of this release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releases = gh api "repos/${{ github.repository }}/releases?per_page=100" | ConvertFrom-Json
+          foreach ($release in $releases) {
+            if ($release.draft -and $release.tag_name -eq "${{ github.ref_name }}") {
+              gh api -X DELETE "repos/${{ github.repository }}/releases/$($release.id)"
+            }
+          }
 
       - uses: softprops/action-gh-release@v2
         with:
-          draft: true
-          name: OptiCore Cleaner ${{ github.ref_name }}
+          draft: false
+          make_latest: true
+          name: SmartCleaner ${{ github.ref_name }}
           body_path: .github/release-notes/${{ github.ref_name }}.md
           files: |
-            OptiCore-Cleaner.exe
-            OptiCore-Cleaner.exe.sha256
+            SmartCleaner.exe
+            SmartCleaner.exe.sha256
