@@ -115,7 +115,7 @@ These items are only listed if their folders exist on your PC. An item is skippe
 | --- | --- |
 | **Keep temp files from the last 24 hours** | On by default. Temp files created or changed in the last day are left alone, so running installers and apps aren't broken. Also applies to the npm, pnpm, pip, Poetry, Go, NuGet and Composer caches. |
 | **Exclusions** | Folders SmartCleaner never touches, including everything inside them. |
-| **Schedule weekly cleanup** | Creates a Task Scheduler task that runs Complete Cleanup every Sunday at 12:00 (or at the next start if the PC was off) and shows a notification. Set it up while running as administrator to include system folders. Schedule it again if you move the exe. |
+| **Schedule weekly cleanup** | Creates a Task Scheduler task that runs Complete Cleanup every Sunday at 12:00 (or at the next start if the PC was off) and shows a notification. Set it up while running as administrator to include system folders. Schedule it again if you move the exe, or if you set it up in version 3.0.0, where it still runs the old file. In Task Scheduler it's called `OptiCore Cleaner weekly cleanup`, the name version 3.0.0 used. |
 | **Theme** | Follow Windows, Light or Dark. |
 
 The Edit menu can copy the log or save it to a text file. Help → **Check for Updates** compares your version with the latest GitHub release. Settings are stored in `HKEY_CURRENT_USER\Software\OptiCore Cleaner`, the name version 3.0.0 used, so they carry over.
@@ -128,7 +128,7 @@ SmartCleaner.exe /auto /custom          your saved Custom Cleanup selection inst
 SmartCleaner.exe /auto /quiet           no notification
 ```
 
-The log of the last automatic run is saved to `%LOCALAPPDATA%\OptiCore Cleaner\last-auto-clean.log`.
+The log of the last automatic run is saved to `%LOCALAPPDATA%\OptiCore Cleaner\last-auto-clean.log`. The folder keeps the name version 3.0.0 used.
 
 ## Safety
 
@@ -170,6 +170,16 @@ From a Developer Command Prompt you can also run:
 ```
 msbuild "Temp and Bin Cleaner V2.sln" /p:Configuration=Release /p:Platform=x64
 ```
+
+Use Build rather than Rebuild if you keep other exes in `x64\Release`: Rebuild's clean step can delete copies built under a different name.
+
+## Releasing
+
+1. Set the version in `version.h`.
+2. Add `.github/release-notes/vX.Y.Z.md` (copy `TEMPLATE.md`) and update `CHANGELOG.md`.
+3. Push a tag named `vX.Y.Z`.
+
+The tag starts a GitHub Actions build that publishes `SmartCleaner.exe` and its checksum straight away as the latest release, with no draft step. It stops without publishing if the tag doesn't match `version.h` or the release notes are missing.
 
 ## Project layout
 

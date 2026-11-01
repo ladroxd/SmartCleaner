@@ -19,7 +19,7 @@ All notable changes to SmartCleaner are listed here, newest first.
 
 ### Changed
 
-- The app is named SmartCleaner again, and the download is `SmartCleaner.exe`. Settings carry over from 3.0.0.
+- The app is named SmartCleaner again, and the download is `SmartCleaner.exe`. Settings carry over from 3.0.0. A weekly cleanup set up in 3.0.0 keeps running the old file until you schedule it again.
 - Caches a tool trusts to be complete are renamed in one step before being deleted, so stopping a clean or a file in use can't leave one half-deleted.
 
 ### Fixed
