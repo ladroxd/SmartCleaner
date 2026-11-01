@@ -8,6 +8,7 @@
 #include <uxtheme.h>
 #include <dwmapi.h>
 #include <winhttp.h>
+#include <tlhelp32.h>
 #include <string>
 #include <vector>
 #include <memory>
@@ -91,18 +92,22 @@ static bool IsRunningAsAdmin() {
 // ---------------------------------------------------------------------------
 
 struct PathRule {
-    const wchar_t* path;            // may use %ENV% variables and one * folder wildcard
+    const wchar_t* path;            // may use %ENV% variables and one * folder wildcard, or start
+                                    // with %STEAM% (its install folder) or %STEAMLIBRARY% (every library)
     const wchar_t* pattern = L"*";  // which files to remove
     bool keepFolders = false;       // remove matching files only, leave subfolders in place
 };
 
-enum Group { GROUP_SYSTEM = 1, GROUP_BROWSER, GROUP_GAMING, GROUP_PRIVACY, GROUP_ADVANCED };
+enum Group { GROUP_SYSTEM = 1, GROUP_BROWSER, GROUP_GAMING, GROUP_PRIVACY, GROUP_ADVANCED, GROUP_DEV };
 
 enum : unsigned {
     F_ADMIN   = 1,  // system folder: mostly skipped without administrator rights
     F_RECENT  = 2,  // temp folder: files changed recently are kept when that option is on
     F_RECYCLE = 4,  // the Recycle Bin (no paths)
     F_DISM    = 8,  // Windows component store cleanup through DISM (no paths)
+    F_APP     = 16, // belongs to an app: only listed when its folders exist on this PC
+    F_WHOLE   = 32, // its tool trusts these folders to be complete, so a half-deleted one would
+                    // break it: each is moved aside in one step, then deleted. Never with F_RECENT.
 };
 
 struct Category {
@@ -111,10 +116,32 @@ struct Category {
     Group group;
     std::vector<PathRule> paths;
     unsigned flags = 0;
-    const wchar_t* service = nullptr;  // stopped while cleaning, then restarted
+    const wchar_t* processes = nullptr;  // "a.exe|b.exe": not cleaned while any of these is running
+    const wchar_t* service = nullptr;    // stopped while cleaning, then restarted
 };
 
+// The disposable caches of a Chromium or Electron app. Logins, cookies and local
+// data sit right next to them, which is why apps list these instead of a whole folder.
+#define CHROMIUM_CACHES(root)                  \
+    { root L"\\Cache", L"*", true },           \
+    { root L"\\Code Cache", L"*", true },      \
+    { root L"\\GPUCache", L"*", true },        \
+    { root L"\\DawnGraphiteCache", L"*", true }, \
+    { root L"\\DawnWebGPUCache", L"*", true }
+
+#define VSCODE_CACHES(root)                    \
+    CHROMIUM_CACHES(root),                     \
+    { root L"\\CachedData" },                  \
+    { root L"\\CachedExtensionVSIXs" },        \
+    { root L"\\logs" }
+
 // Quick Scan and Complete Cleanup cover GROUP_SYSTEM. Custom Cleanup can pick anything.
+//
+// Before adding an app, look inside its folder: plenty named "cache" hold things that can't be
+// downloaded again. Left out on purpose: Maven's .m2 (holds packages built locally), the pnpm store
+// (hard-linked into projects), Poetry's Cache\virtualenvs, Playwright's browsers, Spotify's Data
+// (may hold downloads), Service Worker folders (offline data), OBS's obs_profile_cookies (logins),
+// Steam's depotcache and downloading folders, and everything else under .claude (chats, memory).
 static const Category g_categories[] = {
     { L"Temporary files", L"Your Temp folder", GROUP_SYSTEM,
         { { L"%TEMP%" } }, F_RECENT },
@@ -125,7 +152,7 @@ static const Category g_categories[] = {
     { L"Prefetch", L"App launch traces, rebuilt by Windows (admin)", GROUP_SYSTEM,
         { { L"%WINDIR%\\Prefetch" } }, F_ADMIN },
     { L"Windows Update cache", L"Downloaded updates (admin)", GROUP_SYSTEM,
-        { { L"%WINDIR%\\SoftwareDistribution\\Download" } }, F_ADMIN, L"wuauserv" },
+        { { L"%WINDIR%\\SoftwareDistribution\\Download" } }, F_ADMIN, nullptr, L"wuauserv" },
     { L"Delivery Optimization files", L"Update files shared between PCs (admin)", GROUP_SYSTEM,
         { { L"%WINDIR%\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization\\Cache" } }, F_ADMIN },
     { L"Error reports", L"Windows Error Reporting files", GROUP_SYSTEM,
@@ -172,6 +199,41 @@ static const Category g_categories[] = {
         { { L"%APPDATA%\\discord\\Cache", L"*", true },
           { L"%APPDATA%\\discord\\Code Cache", L"*", true },
           { L"%APPDATA%\\discord\\GPUCache", L"*", true } } },
+    { L"Claude desktop app cache", L"Cached pages and images. Chats are kept", GROUP_BROWSER,
+        { CHROMIUM_CACHES(L"%APPDATA%\\Claude"),
+          CHROMIUM_CACHES(L"%LOCALAPPDATA%\\Packages\\Claude_*\\LocalCache\\Roaming\\Claude") },
+        F_APP, L"claude.exe" },
+    { L"Spotify web cache", L"App interface only. Downloads are kept", GROUP_BROWSER,
+        { CHROMIUM_CACHES(L"%LOCALAPPDATA%\\Spotify\\Browser"),
+          CHROMIUM_CACHES(L"%LOCALAPPDATA%\\Spotify\\Default") },
+        F_APP, L"Spotify.exe" },
+    { L"Notion cache", L"Cached copies. Your own pages are kept", GROUP_BROWSER,
+        { CHROMIUM_CACHES(L"%APPDATA%\\Notion"),
+          CHROMIUM_CACHES(L"%APPDATA%\\Notion\\Partitions\\*") },
+        F_APP, L"Notion.exe" },
+    { L"Slack cache", L"Cached images and files", GROUP_BROWSER,
+        { CHROMIUM_CACHES(L"%APPDATA%\\Slack"),
+          CHROMIUM_CACHES(L"%LOCALAPPDATA%\\Packages\\com.tinyspeck.slackdesktop_*\\LocalCache\\Roaming\\Slack") },
+        F_APP, L"slack.exe" },
+    { L"Microsoft Teams cache", L"Cached images and files", GROUP_BROWSER,
+        { CHROMIUM_CACHES(L"%LOCALAPPDATA%\\Packages\\MSTeams_8wekyb3d8bbwe\\LocalCache\\Microsoft\\MSTeams\\EBWebView\\*") },
+        F_APP, L"ms-teams.exe" },
+    { L"Telegram cache", L"Cached media, fetched when viewed again", GROUP_BROWSER,
+        { { L"%APPDATA%\\Telegram Desktop\\tdata\\user_data*\\cache" },
+          { L"%APPDATA%\\Telegram Desktop\\tdata\\user_data*\\media_cache" } },
+        F_APP, L"Telegram.exe" },
+    { L"OBS Studio cache and logs", L"Browser source cache and old logs", GROUP_BROWSER,
+        { CHROMIUM_CACHES(L"%APPDATA%\\obs-studio\\plugin_config\\obs-browser"),
+          { L"%APPDATA%\\obs-studio\\logs" },
+          { L"%APPDATA%\\obs-studio\\crashes" } },
+        F_APP, L"obs64.exe" },
+    { L"Adobe media cache", L"Premiere and After Effects rebuild it", GROUP_BROWSER,
+        { { L"%APPDATA%\\Adobe\\Common\\Media Cache Files" },
+          { L"%APPDATA%\\Adobe\\Common\\Media Cache" } },
+        F_APP, L"Adobe Premiere Pro.exe|AfterFX.exe|Adobe Media Encoder.exe|Adobe Audition.exe" },
+    { L"VLC album art", L"Cover art, downloaded again as needed", GROUP_BROWSER,
+        { { L"%APPDATA%\\vlc\\art" } },
+        F_APP, L"vlc.exe" },
 
     // Games stutter while these are rebuilt, so they're never cleaned unless picked
     { L"DirectX shader cache", L"Games rebuild it, first launches stutter", GROUP_GAMING,
@@ -184,6 +246,116 @@ static const Category g_categories[] = {
           { L"%LOCALAPPDATA%\\AMD\\DxcCache" },
           { L"%LOCALAPPDATA%\\AMD\\GLCache" },
           { L"%LOCALAPPDATA%\\AMD\\VkCache" } } },
+    { L"Steam cache and logs", L"Web cache, library art and logs", GROUP_GAMING,
+        { { L"%STEAM%\\appcache\\httpcache" },
+          { L"%STEAM%\\appcache\\librarycache" },
+          { L"%STEAM%\\logs" },
+          { L"%STEAM%\\dumps" },
+          CHROMIUM_CACHES(L"%LOCALAPPDATA%\\Steam\\htmlcache"),
+          CHROMIUM_CACHES(L"%LOCALAPPDATA%\\Steam\\htmlcache\\Default"),
+          { L"%LOCALAPPDATA%\\Steam\\htmlcache\\GraphiteDawnCache", L"*", true },
+          { L"%LOCALAPPDATA%\\Steam\\htmlcache\\GrShaderCache", L"*", true },
+          { L"%LOCALAPPDATA%\\Steam\\htmlcache\\ShaderCache", L"*", true },
+          { L"%LOCALAPPDATA%\\Steam\\htmlcache\\Default\\GraphiteDawnCache", L"*", true },
+          { L"%LOCALAPPDATA%\\Steam\\htmlcache\\Default\\GrShaderCache", L"*", true },
+          { L"%LOCALAPPDATA%\\Steam\\htmlcache\\Default\\ShaderCache", L"*", true } },
+        F_APP, L"steam.exe|steamwebhelper.exe" },
+    { L"Steam shader cache", L"Every library. First game launches stutter", GROUP_GAMING,
+        { { L"%STEAMLIBRARY%\\steamapps\\shadercache" } },
+        F_APP, L"steam.exe|steamwebhelper.exe" },
+    { L"Epic Games Launcher cache", L"Web cache, logs and crash reports", GROUP_GAMING,
+        { { L"%LOCALAPPDATA%\\EpicGamesLauncher\\Saved\\webcache*" },
+          { L"%LOCALAPPDATA%\\EpicGamesLauncher\\Saved\\Logs" },
+          { L"%LOCALAPPDATA%\\EpicGamesLauncher\\Saved\\Crashes" } },
+        F_APP, L"EpicGamesLauncher.exe|EpicWebHelper.exe" },
+    { L"EA app cache", L"Web cache and logs", GROUP_GAMING,
+        { { L"%LOCALAPPDATA%\\Electronic Arts\\EA Desktop\\CEF\\BrowserCache" },
+          { L"%LOCALAPPDATA%\\Electronic Arts\\EA Desktop\\Logs" } },
+        F_APP, L"EADesktop.exe|EACefSubProcess.exe" },
+    { L"Ubisoft Connect cache", L"Downloaded web data", GROUP_GAMING,
+        { { L"%LOCALAPPDATA%\\Ubisoft Game Launcher\\cache\\http*" },
+          { L"%ProgramFiles(x86)%\\Ubisoft\\Ubisoft Game Launcher\\cache\\http*" } },
+        F_APP, L"upc.exe|UbisoftConnect.exe" },
+    { L"Battle.net cache", L"Launcher web cache", GROUP_GAMING,
+        { { L"%LOCALAPPDATA%\\Battle.net\\Cache" },
+          { L"%LOCALAPPDATA%\\Battle.net\\BrowserCaches" } },
+        F_APP, L"Battle.net.exe" },
+    { L"GOG Galaxy cache", L"Web cache and logs", GROUP_GAMING,
+        { { L"%PROGRAMDATA%\\GOG.com\\Galaxy\\webcache" },
+          { L"%PROGRAMDATA%\\GOG.com\\Galaxy\\logs" } },
+        F_APP, L"GalaxyClient.exe" },
+    { L"Riot Client logs", L"Old log files", GROUP_GAMING,
+        { { L"%LOCALAPPDATA%\\Riot Games\\Riot Client\\Logs" } },
+        F_APP, L"RiotClientServices.exe|Riot Client.exe" },
+
+    // Everything here comes back on the next build or install, which takes longer and needs internet.
+    { L"npm cache", L"Downloaded packages, fetched as needed", GROUP_DEV,
+        { { L"%LOCALAPPDATA%\\npm-cache\\_cacache" },
+          { L"%LOCALAPPDATA%\\npm-cache\\_logs" } },
+        F_APP | F_RECENT },
+    { L"npx packages", L"Tools run through npx. Needs Node.js closed", GROUP_DEV,
+        { { L"%LOCALAPPDATA%\\npm-cache\\_npx" } },
+        F_APP | F_WHOLE, L"node.exe" },
+    { L"Yarn cache", L"Downloaded packages, fetched as needed", GROUP_DEV,
+        { { L"%LOCALAPPDATA%\\Yarn\\Cache" },
+          { L"%LOCALAPPDATA%\\Yarn\\Berry\\cache" } },
+        F_APP | F_WHOLE },
+    { L"pnpm cache", L"Metadata only. The store is kept", GROUP_DEV,
+        { { L"%LOCALAPPDATA%\\pnpm-cache" } },
+        F_APP | F_RECENT },
+    { L"Bun cache", L"Downloaded packages, fetched as needed", GROUP_DEV,
+        { { L"%USERPROFILE%\\.bun\\install\\cache" } },
+        F_APP | F_WHOLE, L"bun.exe" },
+    { L"node-gyp cache", L"Node.js headers for native modules", GROUP_DEV,
+        { { L"%LOCALAPPDATA%\\node-gyp\\Cache" } },
+        F_APP | F_WHOLE },
+    { L"Electron downloads", L"Electron builds, fetched as needed", GROUP_DEV,
+        { { L"%LOCALAPPDATA%\\electron\\Cache" },
+          { L"%LOCALAPPDATA%\\electron-builder\\Cache" } },
+        F_APP | F_WHOLE },
+    { L"pip cache", L"Downloaded Python packages", GROUP_DEV,
+        { { L"%LOCALAPPDATA%\\pip\\Cache" } },
+        F_APP | F_RECENT },
+    { L"Poetry cache", L"Downloads only. Virtualenvs are kept", GROUP_DEV,
+        { { L"%LOCALAPPDATA%\\pypoetry\\Cache\\cache" },
+          { L"%LOCALAPPDATA%\\pypoetry\\Cache\\artifacts" } },
+        F_APP | F_RECENT },
+    { L"uv cache", L"Python packages and tools run through uvx", GROUP_DEV,
+        { { L"%LOCALAPPDATA%\\uv\\cache" } },
+        F_APP | F_WHOLE, L"uv.exe|uvx.exe" },
+    { L"Cargo cache", L"Downloaded Rust crates and their sources", GROUP_DEV,
+        { { L"%USERPROFILE%\\.cargo\\registry\\cache" },
+          { L"%USERPROFILE%\\.cargo\\registry\\src" } },
+        F_APP | F_WHOLE, L"cargo.exe|rustc.exe|rust-analyzer.exe" },
+    { L"Go build cache", L"Compiled packages, rebuilt as needed", GROUP_DEV,
+        { { L"%LOCALAPPDATA%\\go-build" } },
+        F_APP | F_RECENT },
+    { L"NuGet HTTP cache", L"Downloads only. Packages are kept", GROUP_DEV,
+        { { L"%LOCALAPPDATA%\\NuGet\\v3-cache" },
+          { L"%LOCALAPPDATA%\\NuGet\\plugins-cache" } },
+        F_APP | F_RECENT },
+    { L"Gradle cache", L"Dependencies and build outputs", GROUP_DEV,
+        { { L"%USERPROFILE%\\.gradle\\caches" } },
+        F_APP | F_WHOLE, L"java.exe|javaw.exe|studio64.exe|idea64.exe" },
+    { L"Composer cache", L"Downloaded PHP packages", GROUP_DEV,
+        { { L"%LOCALAPPDATA%\\Composer\\files" },
+          { L"%LOCALAPPDATA%\\Composer\\repo" },
+          { L"%LOCALAPPDATA%\\Composer\\vcs" } },
+        F_APP | F_RECENT },
+    { L"Claude Code cache", L"Changelog and MCP logs. Chats are kept", GROUP_DEV,
+        { { L"%USERPROFILE%\\.claude\\cache" },
+          { L"%LOCALAPPDATA%\\claude-cli-nodejs\\Cache" } },
+        F_APP, L"claude.exe" },
+    { L"Visual Studio Code cache", L"Caches, extension downloads and logs", GROUP_DEV,
+        { VSCODE_CACHES(L"%APPDATA%\\Code"),
+          { L"%LOCALAPPDATA%\\Microsoft\\vscode-cpptools\\ipch" } },
+        F_APP, L"Code.exe" },
+    { L"Cursor cache", L"Caches, extension downloads and logs", GROUP_DEV,
+        { VSCODE_CACHES(L"%APPDATA%\\Cursor") },
+        F_APP, L"Cursor.exe" },
+    { L"Windsurf cache", L"Caches, extension downloads and logs", GROUP_DEV,
+        { VSCODE_CACHES(L"%APPDATA%\\Windsurf") },
+        F_APP, L"Windsurf.exe" },
 
     { L"Recent files list", L"Shortcuts to recently opened files", GROUP_PRIVACY,
         { { L"%APPDATA%\\Microsoft\\Windows\\Recent", L"*.lnk", true } } },
@@ -226,6 +398,7 @@ struct Job {
     std::vector<LONG64> catBytes = std::vector<LONG64>(CATEGORY_COUNT, -1);  // per finished category
 
     // Worker-only bookkeeping
+    int appsOpen = 0;  // items skipped because the app using them is running
     bool ageFilter = false;
     double progBase = 0, progSpan = 0;
     LONG64 catStart = 0, catExpected = 0;
@@ -278,6 +451,9 @@ static std::vector<std::wstring> g_exclusions;
 static std::vector<std::wstring> g_customSelection;  // category names
 static bool g_hasCustomSelection = false;
 static int  g_scheduled = -1;  // weekly task exists: -1 not checked yet
+
+// Steam's install folder first, then its other libraries. Set once at startup, before any thread runs.
+static std::vector<std::wstring> g_steamLibraries;
 
 struct Palette { COLORREF bg, text, muted, accent, panel, border, hover; };
 static const Palette kLight = { RGB(245, 246, 250), RGB(50, 50, 60), RGB(105, 108, 120), RGB(50, 120, 220),
@@ -484,6 +660,12 @@ static void UpdateProgress(Job& job) {
     job.progress = (int)((job.progBase + job.progSpan * (done < 1.0 ? done : 1.0)) * 1000.0);
 }
 
+// Windows refuses paths over about 260 characters unless they carry this prefix.
+// Package caches nest deep enough to need it.
+static std::wstring LongPath(const std::wstring& path) {
+    return path.size() < 240 ? path : L"\\\\?\\" + path;
+}
+
 // Deletes (or, when scanning, counts) one file. `changed` is the newer of its
 // creation and write times: extracted installer files keep old write times.
 static void ProcessFile(Job& job, const std::wstring& path, DWORD attrs, ULONGLONG size, const FILETIME& changed) {
@@ -492,9 +674,10 @@ static void ProcessFile(Job& job, const std::wstring& path, DWORD attrs, ULONGLO
         return;
     }
     if (!job.scanOnly) {
+        std::wstring target = LongPath(path);
         if (attrs & FILE_ATTRIBUTE_READONLY)
-            SetFileAttributes(path.c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
-        if (!DeleteFile(path.c_str())) {
+            SetFileAttributes(target.c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
+        if (!DeleteFile(target.c_str())) {
             ++job.skipped;
             Log(job, L"  Skipped: " + path);
             return;
@@ -509,7 +692,7 @@ static void ProcessFile(Job& job, const std::wstring& path, DWORD attrs, ULONGLO
 // Deletes everything inside `path` that matches `pattern` but leaves `path` itself in place.
 void ClearDirectory(Job& job, const std::wstring& path, const wchar_t* pattern = L"*", bool keepFolders = false) {
     WIN32_FIND_DATA fd;
-    HANDLE hFind = FindFirstFile((path + L"\\*").c_str(), &fd);
+    HANDLE hFind = FindFirstFile(LongPath(path + L"\\*").c_str(), &fd);
     if (hFind == INVALID_HANDLE_VALUE) return;
 
     do {
@@ -534,9 +717,10 @@ void ClearDirectory(Job& job, const std::wstring& path, const wchar_t* pattern =
             }
             ClearDirectory(job, full, pattern, keepFolders);
             if (!keepFolders && !job.scanOnly) {
+                std::wstring target = LongPath(full);
                 if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
-                    SetFileAttributes(full.c_str(), fd.dwFileAttributes & ~FILE_ATTRIBUTE_READONLY);
-                RemoveDirectory(full.c_str());  // fails harmlessly while kept files remain
+                    SetFileAttributes(target.c_str(), fd.dwFileAttributes & ~FILE_ATTRIBUTE_READONLY);
+                RemoveDirectory(target.c_str());  // fails harmlessly while kept files remain
             }
         } else if (PathMatchSpec(name.c_str(), pattern)) {
             ProcessFile(job, full, fd.dwFileAttributes,
@@ -548,10 +732,65 @@ void ClearDirectory(Job& job, const std::wstring& path, const wchar_t* pattern =
     FindClose(hFind);
 }
 
+// Steam can be installed anywhere and keep libraries on other drives. Its own
+// settings say where: the registry for the install, libraryfolders.vdf for the rest.
+static void FindSteamLibraries() {
+    wchar_t buf[MAX_PATH];
+    DWORD size = sizeof(buf);
+    if (RegGetValue(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath", RRF_RT_REG_SZ,
+                    NULL, buf, &size) != ERROR_SUCCESS)
+        return;
+    std::wstring steam = buf;
+    std::replace(steam.begin(), steam.end(), L'/', L'\\');
+    while (!steam.empty() && steam.back() == L'\\') steam.pop_back();
+    if (steam.empty()) return;
+    g_steamLibraries.push_back(steam);
+
+    HANDLE file = CreateFile((steam + L"\\steamapps\\libraryfolders.vdf").c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return;
+    std::string vdf(1 << 20, '\0');
+    DWORD read = 0;
+    if (!ReadFile(file, &vdf[0], (DWORD)vdf.size(), &read, NULL)) read = 0;
+    CloseHandle(file);
+    vdf.resize(read);
+
+    // Entries look like:  "path"    "D:\\SteamLibrary"
+    const std::string key = "\"path\"";
+    for (size_t p = vdf.find(key); p != std::string::npos; p = vdf.find(key, p + key.size())) {
+        size_t open = vdf.find('"', p + key.size());
+        if (open == std::string::npos) break;
+        std::string value;
+        for (size_t i = open + 1; i < vdf.size() && vdf[i] != '"'; ++i) {
+            if (vdf[i] == '\\' && i + 1 < vdf.size()) ++i;
+            value += vdf[i];
+        }
+        wchar_t library[MAX_PATH];
+        int len = MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, library, MAX_PATH);
+        if (len > 0 && _wcsicmp(library, steam.c_str()) != 0)
+            g_steamLibraries.push_back(library);
+    }
+}
+
 // Expands %ENV% variables and one * folder wildcard (e.g. "...\User Data\*\Cache")
-// into every matching path.
+// into every matching path. %STEAM% and %STEAMLIBRARY% stand for Steam's folders,
+// and match nothing when Steam isn't installed.
 static std::vector<std::wstring> ExpandPath(const wchar_t* spec) {
     std::vector<std::wstring> result;
+
+    const size_t steamLen = wcslen(L"%STEAM%"), libraryLen = wcslen(L"%STEAMLIBRARY%");
+    if (wcsncmp(spec, L"%STEAM%", steamLen) == 0) {
+        if (!g_steamLibraries.empty())
+            result = ExpandPath((g_steamLibraries[0] + (spec + steamLen)).c_str());
+        return result;
+    }
+    if (wcsncmp(spec, L"%STEAMLIBRARY%", libraryLen) == 0) {
+        for (const std::wstring& library : g_steamLibraries)
+            for (const std::wstring& path : ExpandPath((library + (spec + libraryLen)).c_str()))
+                result.push_back(path);
+        return result;
+    }
+
     wchar_t buf[MAX_PATH * 2];
     DWORD len = ExpandEnvironmentStrings(spec, buf, ARRAYSIZE(buf));
     if (len == 0 || len > ARRAYSIZE(buf)) return result;
@@ -594,8 +833,44 @@ static std::wstring NormalizePath(const std::wstring& path) {
     return result;
 }
 
+// A folder is moved here while it's deleted, in the same parent folder. If the clean is
+// stopped, or a file inside is stuck, what's left is picked up by the next clean.
+static const wchar_t kMovedSuffix[] = L".opticore-old";
+
+// Cleans an F_WHOLE folder. Moving it is all or nothing: the rename fails while anything inside is in
+// use, and once it succeeds the tool just finds no cache and makes a new one, whatever happens next.
+static void CleanWholeFolder(Job& job, const std::wstring& path, DWORD attrs) {
+    // Moving a link would lose the redirect, and an excluded folder inside would move with the rest.
+    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) {
+        if (!job.scanOnly) {
+            ++job.skipped;
+            Log(job, L"  Skipped (link): " + path);
+        }
+        return;
+    }
+    for (const std::wstring& folder : job.exclusions) {
+        if (IsUnder(folder, path)) {
+            Log(job, L"  Excluded: " + folder);
+            return;
+        }
+    }
+    if (job.scanOnly) {
+        ClearDirectory(job, path);
+        return;
+    }
+    std::wstring moved = path + kMovedSuffix;
+    if (!MoveFileEx(LongPath(path).c_str(), LongPath(moved).c_str(), 0)) {
+        ++job.skipped;
+        Log(job, L"  Skipped (in use): " + path);
+        return;
+    }
+    ClearDirectory(job, moved);
+    RemoveDirectory(LongPath(moved).c_str());
+}
+
 // Cleans one folder (its contents) or one file.
-void CleanLocation(Job& job, const std::wstring& path, const wchar_t* pattern = L"*", bool keepFolders = false) {
+void CleanLocation(Job& job, const std::wstring& path, const wchar_t* pattern = L"*", bool keepFolders = false,
+                   bool whole = false) {
     if (job.cancel) return;
 
     // Only absolute paths, and never a drive root.
@@ -605,10 +880,18 @@ void CleanLocation(Job& job, const std::wstring& path, const wchar_t* pattern = 
         return;
     }
 
-    WIN32_FILE_ATTRIBUTE_DATA info;
-    if (!GetFileAttributesEx(path.c_str(), GetFileExInfoStandard, &info)) return;
+    if (whole) {
+        std::wstring moved = path + kMovedSuffix;
+        ClearDirectory(job, moved);
+        if (!job.scanOnly) RemoveDirectory(LongPath(moved).c_str());
+    }
 
-    if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+    WIN32_FILE_ATTRIBUTE_DATA info;
+    if (!GetFileAttributesEx(LongPath(path).c_str(), GetFileExInfoStandard, &info)) return;
+
+    if (whole && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        CleanWholeFolder(job, path, info.dwFileAttributes);
+    else if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
         ClearDirectory(job, path, pattern, keepFolders);
     else
         ProcessFile(job, path, info.dwFileAttributes,
@@ -720,6 +1003,31 @@ static void StartServiceByName(const wchar_t* name) {
     CloseServiceHandle(scm);
 }
 
+// The first of the "a.exe|b.exe" processes that's running, or empty if none are.
+static std::wstring FindRunningProcess(const wchar_t* names) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return L"";
+    std::wstring list = std::wstring(L"|") + names + L"|", found;
+    PROCESSENTRY32 entry = { sizeof(entry) };
+    for (BOOL more = Process32First(snapshot, &entry); more && found.empty(); more = Process32Next(snapshot, &entry))
+        if (StrStrI(list.c_str(), (std::wstring(L"|") + entry.szExeFile + L"|").c_str()))
+            found = entry.szExeFile;
+    CloseHandle(snapshot);
+    return found;
+}
+
+// Whether an F_APP item has anything on this PC, so the checklist can leave out apps you don't have.
+static bool IsCategoryPresent(const Category& cat) {
+    for (const PathRule& rule : cat.paths) {
+        for (const std::wstring& path : ExpandPath(rule.path)) {
+            if (GetFileAttributes(LongPath(path).c_str()) != INVALID_FILE_ATTRIBUTES ||
+                GetFileAttributes(LongPath(path + kMovedSuffix).c_str()) != INVALID_FILE_ATTRIBUTES)
+                return true;
+        }
+    }
+    return false;
+}
+
 static void RunCategory(Job& job, int index) {
     const Category& cat = g_categories[index];
     LONG   files0 = job.files;
@@ -731,6 +1039,15 @@ static void RunCategory(Job& job, int index) {
         if ((cat.flags & F_ADMIN) && !g_isAdmin)
             header += L" (needs administrator for a full clean)";
         Log(job, header + L"...");
+
+        if (cat.processes) {
+            std::wstring running = FindRunningProcess(cat.processes);
+            if (!running.empty()) {
+                Log(job, L"  Skipped: " + running + L" is running. Close it and clean again.");
+                ++job.appsOpen;
+                return;
+            }
+        }
     }
 
     job.ageFilter = job.keepRecent && (cat.flags & F_RECENT);
@@ -753,7 +1070,7 @@ static void RunCategory(Job& job, int index) {
                 std::wstring key = NormalizePath(path) + L"|" + rule.pattern;
                 if (std::find(job.done.begin(), job.done.end(), key) != job.done.end()) continue;
                 job.done.push_back(key);
-                CleanLocation(job, path, rule.pattern, rule.keepFolders);
+                CleanLocation(job, path, rule.pattern, rule.keepFolders, (cat.flags & F_WHOLE) != 0);
             }
         }
         if (restartService)
@@ -856,6 +1173,10 @@ static std::wstring LogSummary(const Job& job) {
         AppendLog(line);
         swprintf_s(line, L"  Skipped       : %ld", job.skipped.load());
         AppendLog(line);
+        if (job.appsOpen) {
+            swprintf_s(line, L"  Apps open     : %d %ls not cleaned", job.appsOpen, job.appsOpen == 1 ? L"item" : L"items");
+            AppendLog(line);
+        }
         if (job.kept) {
             swprintf_s(line, L"  Kept (recent) : %ld", job.kept.load());
             AppendLog(line);
@@ -866,8 +1187,12 @@ static std::wstring LogSummary(const Job& job) {
             AppendLog(line);
         }
         AppendLog(L"============================");
-        swprintf_s(line, L"Freed %ls: %ld files deleted, %ld skipped (in use or protected).",
-            total.c_str(), job.files.load(), job.skipped.load());
+        if (job.appsOpen)
+            swprintf_s(line, L"Freed %ls. %d %ls not cleaned: close the apps using them and clean again.",
+                total.c_str(), job.appsOpen, job.appsOpen == 1 ? L"item" : L"items");
+        else
+            swprintf_s(line, L"Freed %ls: %ld files deleted, %ld skipped (in use or protected).",
+                total.c_str(), job.files.load(), job.skipped.load());
     }
     return line;
 }
@@ -1338,7 +1663,9 @@ static void SetSizeText(int index) {
         text = ((cat.flags & F_ADMIN) && !g_isAdmin) ? L"needs admin" : L"empty";
     else
         text = FormatBytes((ULONGLONG)size);
-    ListView_SetItemText(g_hList, RowOfCategory(index), 2, (LPWSTR)text.c_str());
+    int row = RowOfCategory(index);
+    if (row >= 0)  // apps that aren't on this PC have no row
+        ListView_SetItemText(g_hList, row, 2, (LPWSTR)text.c_str());
 }
 
 static void RefreshSizes() {
@@ -1351,6 +1678,7 @@ static void FillCategoryList() {
         { GROUP_SYSTEM,   L"System junk (Complete Cleanup)" },
         { GROUP_BROWSER,  L"Browsers & apps" },
         { GROUP_GAMING,   L"Gaming" },
+        { GROUP_DEV,      L"Developer tools" },
         { GROUP_PRIVACY,  L"Privacy" },
         { GROUP_ADVANCED, L"Advanced" },
     };
@@ -1374,6 +1702,8 @@ static void FillCategoryList() {
 
     g_listLoading = true;
     for (int i = 0; i < CATEGORY_COUNT; ++i) {
+        if ((g_categories[i].flags & F_APP) && !IsCategoryPresent(g_categories[i]))
+            continue;
         LVITEM item = {};
         item.mask     = LVIF_TEXT | LVIF_PARAM | LVIF_GROUPID;
         item.iItem    = i;
@@ -1386,6 +1716,28 @@ static void FillCategoryList() {
     }
     g_listLoading = false;
     RefreshSizes();
+}
+
+// Windows draws group headers dark blue in every theme, unreadable on a dark background.
+static LRESULT DrawGroupHeader(const NMLVCUSTOMDRAW* cd) {
+    wchar_t header[64] = {};
+    LVGROUP group = {};
+    group.cbSize    = sizeof(group);
+    group.mask      = LVGF_HEADER;
+    group.pszHeader = header;
+    group.cchHeader = ARRAYSIZE(header);
+    ListView_GetGroupInfo(g_hList, (int)cd->nmcd.dwItemSpec, &group);
+
+    HDC hdc = cd->nmcd.hdc;
+    RECT rc = cd->rcText;
+    FillRect(hdc, &rc, g_hPanelBrush);
+    rc.left += S(6);
+    HFONT oldFont = (HFONT)SelectObject(hdc, g_hFontBtn);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, g_pal.accent);
+    DrawText(hdc, header, -1, &rc, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    SelectObject(hdc, oldFont);
+    return CDRF_SKIPDEFAULT;
 }
 
 static std::vector<int> CheckedCategories() {
@@ -2161,6 +2513,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
     case WM_NOTIFY: {
         NMHDR* hdr = (NMHDR*)lParam;
+        if (hdr->hwndFrom == g_hList && hdr->code == NM_CUSTOMDRAW && g_dark) {
+            const NMLVCUSTOMDRAW* cd = (const NMLVCUSTOMDRAW*)lParam;
+            if (cd->nmcd.dwDrawStage == CDDS_PREPAINT && cd->dwItemType == LVCDI_GROUP)
+                return DrawGroupHeader(cd);
+        }
         if (hdr->hwndFrom == g_hList && hdr->code == LVN_ITEMCHANGED && !g_listLoading) {
             NMLISTVIEW* nm = (NMLISTVIEW*)lParam;
             if ((nm->uChanged & LVIF_STATE) && ((nm->uNewState ^ nm->uOldState) & LVIS_STATEIMAGEMASK)) {
@@ -2416,6 +2773,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
     g_dpi     = GetDpiForSystem();
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     LoadSettings();
+    FindSteamLibraries();
 
     // /auto runs Complete Cleanup without a window (used by the weekly task),
     // /auto /custom runs the saved Custom Cleanup selection, /quiet skips the notification.
